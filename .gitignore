@@ -1,0 +1,41 @@
+# Build artifacts
+build/
+bin/
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Generated downloads
+downloads/
+*.mp4
+*.mkv
+*.webm
+*.mp3
+*.m4a
+*.aac
+*.ogg
+*.opus
+*.wav
+*.flac
+
+# Browser/session artifacts
+cookies.txt
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# IDE/editor clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
