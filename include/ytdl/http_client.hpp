@@ -9,6 +9,7 @@ namespace ytdl {
 
 // Configure optional Netscape-format cookies for subsequent HTTP requests.
 void setCookieFile(const std::string& path);
+std::string getCookieFile();
 
 // Select a browser profile used to synthesize the default desktop user agent.
 void setBrowserProfile(const std::string& browser);

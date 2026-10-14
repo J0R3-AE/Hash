@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -234,6 +235,39 @@ std::vector<std::string> parseDownloadSelectors(const std::string& input)
         result.push_back(currentToken);
     }
     return result;
+}
+
+std::string readConfigValue(const std::string& configPath,
+                           const std::string& key)
+{
+    std::ifstream input(configPath);
+    if (!input)
+        return {};
+
+    const std::string normalizedKey = trim(key);
+    std::string line;
+    while (std::getline(input, line)) {
+        const std::string trimmed = trim(line);
+        if (trimmed.empty() || trimmed[0] == '#' || trimmed[0] == ';')
+            continue;
+
+        const auto equalsPos = trimmed.find('=');
+        if (equalsPos == std::string::npos)
+            continue;
+
+        const std::string candidateKey = trim(trimmed.substr(0, equalsPos));
+        if (candidateKey != normalizedKey)
+            continue;
+
+        std::string value = trim(trimmed.substr(equalsPos + 1));
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
+            value = value.substr(1, value.size() - 2);
+        if (value.size() >= 2 && value.front() == '\'' && value.back() == '\'')
+            value = value.substr(1, value.size() - 2);
+        return value;
+    }
+
+    return {};
 }
 
 std::string normalizeBrowserName(const std::string& input)

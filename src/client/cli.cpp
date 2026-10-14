@@ -97,6 +97,21 @@ int main(int argc, char* argv[])
     std::string browserProfile = "auto";
     bool allowNoCookies = false;
 
+    const fs::path configPath = fs::current_path() / ".yt-downloader.conf";
+    const fs::path homeConfigPath = fs::path(std::getenv("HOME") ? std::getenv("HOME") : "") / ".yt-downloader.conf";
+    const fs::path activeConfigPath = fs::exists(configPath) ? configPath : (fs::exists(homeConfigPath) ? homeConfigPath : fs::path{});
+    if (!activeConfigPath.empty()) {
+        const std::string configBrowser = readConfigValue(activeConfigPath.string(), "browser");
+        const std::string configCookies = readConfigValue(activeConfigPath.string(), "cookies");
+        const std::string configNoCookies = readConfigValue(activeConfigPath.string(), "no-cookies");
+        if (browserProfile == "auto" && !configBrowser.empty())
+            browserProfile = configBrowser;
+        if (cookieFile.empty() && !configCookies.empty())
+            cookieFile = configCookies;
+        if (!allowNoCookies && configNoCookies == "true")
+            allowNoCookies = true;
+    }
+
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {

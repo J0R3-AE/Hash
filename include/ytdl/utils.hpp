@@ -15,6 +15,8 @@ bool isPlaylistUrl(const std::string& input);
 std::vector<std::string> parseFormatCodes(const std::string& input);
 std::vector<std::string> parseDownloadSelectors(const std::string& input);
 std::string normalizeBrowserName(const std::string& input);
+std::string readConfigValue(const std::string& configPath,
+                           const std::string& key);
 std::string noCookiesWarningMessage();
 std::string browserUserAgentForName(const std::string& browser);
 bool isVideoRestrictedOrUnavailable(const std::string& status,

@@ -17,6 +17,7 @@ int main()
     using ytdl::noCookiesWarningMessage;
     using ytdl::normalizeBrowserName;
     using ytdl::parseFormatCodes;
+    using ytdl::readConfigValue;
     using ytdl::sanitizeFilename;
     using ytdl::summarizeFormatEntries;
     using ytdl::trim;
@@ -66,6 +67,19 @@ int main()
     const std::string noCookiesWarning = noCookiesWarningMessage();
     assert(noCookiesWarning.find("WARNING") != std::string::npos);
     assert(noCookiesWarning.find("--cookies") != std::string::npos);
+
+    const auto configDir = std::filesystem::temp_directory_path() / "hash-config-test";
+    std::filesystem::create_directories(configDir);
+    const auto configPath = configDir / ".yt-downloader.conf";
+    std::ofstream configStream(configPath);
+    configStream << "browser = \"edge\"\n";
+    configStream << "cookies = \"/tmp/custom-cookies.txt\"\n";
+    configStream << "no-cookies = true\n";
+    configStream.close();
+
+    assert(readConfigValue(configPath.string(), "browser") == "edge");
+    assert(readConfigValue(configPath.string(), "cookies") == "/tmp/custom-cookies.txt");
+    assert(readConfigValue(configPath.string(), "no-cookies") == "true");
 
     const auto tempDir = std::filesystem::temp_directory_path() /
                          "hash-cookie-import-test";

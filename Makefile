@@ -41,7 +41,7 @@ $(BUILD_DIR):
 $(BIN_DIR):
 	mkdir -p $@
 
-$(TEST_TARGET): tests/test_utils.cpp src/core/utils.cpp src/core/client/http.cpp | $(BUILD_DIR)
+$(TEST_TARGET): tests/test_utils.cpp src/core/utils.cpp src/core/cookie.cpp src/core/client/http.cpp | $(BUILD_DIR)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@ $(LDLIBS)
 
 $(SELECTOR_TEST_TARGET): tests/test_format_selector.cpp src/core/format/selector.cpp src/core/utils.cpp | $(BUILD_DIR)

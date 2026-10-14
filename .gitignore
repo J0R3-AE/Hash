@@ -23,6 +23,8 @@ downloads/
 
 # Browser/session artifacts
 cookies.txt
+.yt-downloader.conf
+.yt-downloader.conf.local
 *.sqlite
 *.sqlite3
 *.db
