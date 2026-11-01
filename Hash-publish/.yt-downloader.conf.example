@@ -1,0 +1,7 @@
+# Local config for yt-downloader.
+# Copy this file to .yt-downloader.conf and edit it for your machine.
+# The local .yt-downloader.conf file is intentionally ignored by git.
+
+browser = "edge"
+cookies = "/path/to/cookies.txt"
+no-cookies = false

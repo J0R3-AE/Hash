@@ -929,7 +929,7 @@ namespace ytdl
             {
                 error =
                     "A local file write failed while downloading '" + destination.u8string() + "'. Check the available disk space and "
-                                                                                             "write permissions.";
+                                                                                               "write permissions.";
 
                 break;
             }

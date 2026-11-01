@@ -1,0 +1,211 @@
+HASH YOUTUBE DOWNLOADER - BUILDING FROM SOURCE
+============================================================
+
+This file explains how to build Hash from source. For application
+features, usage examples, limitations, and privacy notes, see README.md.
+
+PROJECT OUTPUT DIRECTORIES
+--------------------------
+All generated files are placed under the build directory:
+
+  build/linux/       Native Linux build
+  build/windows/     MXE Windows cross-build
+
+Typical Linux executables:
+  build/linux/bin/yt-downloader
+  build/linux/bin/yt-downloader-gui
+
+Typical Windows executables:
+  build/windows/bin/yt-downloader.exe
+  build/windows/bin/yt-downloader-gui.exe
+
+The Windows package target writes its distributable files to:
+  build/windows/package/
+
+REQUIREMENTS: LINUX
+-------------------
+Required for the CLI:
+  - C++17 compiler (GCC or Clang)
+  - GNU Make
+  - pkg-config
+  - libcurl development headers and libraries
+  - SQLite development headers and libraries
+  - Boost headers (Boost.PropertyTree is used for JSON parsing)
+
+Required for the GUI:
+  - Qt 5 Widgets development files
+
+On Debian or Ubuntu, install the dependencies with:
+
+  sudo apt update
+  sudo apt install build-essential pkg-config \
+      libcurl4-openssl-dev libsqlite3-dev libboost-dev qtbase5-dev
+
+BUILDING ON LINUX
+-----------------
+Run commands from the repository root, where the Makefile is located.
+
+Build the default targets (CLI and GUI):
+
+  make
+
+Build only the CLI:
+
+  make cli
+
+Build the GUI and its required CLI/core components:
+
+  make gui
+
+Build and run the tests:
+
+  make test
+
+Build the Linux targets explicitly:
+
+  make linux
+
+The executable output paths are:
+
+  build/linux/bin/yt-downloader
+  build/linux/bin/yt-downloader-gui
+
+BUILDING WINDOWS WITH MXE
+-------------------------
+The Windows cross-build uses MXE's static MinGW target:
+
+  x86_64-w64-mingw32.static
+
+By default, the Makefile expects MXE to be installed at:
+
+  ~/Code/mxe
+
+The default MXE toolchain path can be changed with MXE_ROOT. The
+compiler target can be changed with MXE_TARGET.
+
+The static MXE target needs compatible target versions of at least:
+  - Boost headers
+  - libcurl
+  - SQLite
+  - Qt 5 Widgets and its static Windows platform plugin
+
+The Qt Windows platform plugin is normally provided as an archive such
+as libqwindows.a. The GUI source must import QWindowsIntegrationPlugin
+for a static Qt build, and the plugin plus its required Qt support
+libraries must be linked into the GUI executable.
+
+If the MXE packages are not installed, build them from the MXE directory.
+For example:
+
+  cd ~/Code/mxe
+  make MXE_TARGETS='x86_64-w64-mingw32.static' \
+      boost curl sqlite qt5 -j2
+
+Qt and other large packages can require substantial memory and disk
+space. If WSL becomes unresponsive or runs out of memory, reduce the
+parallel job count to -j1 or -j2. Avoid using every reported CPU core
+for a large Qt build unless the machine has enough available memory.
+
+Return to the Hash repository before running its build targets:
+
+  cd /path/to/Hash
+
+Build the Windows CLI and GUI:
+
+  make windows
+
+Build Linux and Windows:
+
+  make all-platforms
+
+Create the Windows distribution folder:
+
+  make package-windows
+
+The Windows executables are built under:
+
+  build/windows/bin/
+
+The package target places the distributable files under:
+
+  build/windows/package/
+
+The intended GUI build embeds the CLI entry point and downloader core
+inside yt-downloader-gui.exe. The standalone yt-downloader.exe remains
+available separately for command-line use and fallback purposes. To
+embed the CLI, the Makefile compiles src/client/cli.cpp with
+-DYTDL_EMBED_CLI and compiles src/client/gui.cpp with
+-DYTDL_GUI_EMBEDDED_CLI. The GUI link must also include the core object
+files and the separately compiled embedded CLI object.
+
+MXE AND STATIC-LINKING NOTES
+----------------------------
+A static MinGW target does not automatically make every dependency
+static. Check the final executable's imported DLL list before
+redistributing it. Windows system DLLs are expected; third-party runtime
+DLLs must either be eliminated through correct static linking or
+included with the distribution.
+
+The Windows GUI additionally depends on the Qt platform plugin and
+matching Qt static support libraries. A successful compile or link does
+not prove that the GUI will launch on another Windows machine. Test the
+packaged application on a Windows system that does not have MXE's
+runtime directories on PATH.
+
+To inspect imported DLL names from WSL, use MXE's objdump, for example:
+
+  ~/Code/mxe/usr/bin/x86_64-w64-mingw32.static-objdump \
+      -p build/windows/bin/yt-downloader-gui.exe
+
+If the build reports that a Qt support archive or the qwindows plugin
+is missing, verify that the matching static Qt package is installed
+for the same MXE target. Do not mix static and shared MXE libraries.
+
+BUILD OPTIONS
+-------------
+The Makefile supports these targets:
+
+  make              Build the default Linux CLI and GUI targets
+  make cli          Build only the Linux CLI
+  make gui          Build the Linux GUI and its dependencies
+  make linux        Build Linux targets
+  make windows      Cross-build Windows targets with MXE
+  make all-platforms Build Linux and Windows targets
+  make package-windows
+                    Prepare the Windows distribution folder
+  make test         Build and run Linux tests, or build Windows tests
+  make clean        Remove generated build outputs
+  make install      Install the Linux CLI
+
+To override the MXE location or target, pass variables to make:
+
+  make windows MXE_ROOT=/path/to/mxe
+  make windows MXE_TARGET=x86_64-w64-mingw32.static
+
+CLEANING BUILD OUTPUTS
+----------------------
+To remove generated binaries, object files, test executables, and package
+files for both platforms:
+
+  make clean
+
+This removes build/, dist/, and the legacy bin/ directory. It does not
+remove source files, headers, tests, documentation, or the Makefile.
+
+TESTING AND REPORTING BUILD PROBLEMS
+------------------------------------
+Run the Linux tests with:
+
+  make test
+
+Windows test executables can be built with the Windows test target, but
+must be run on Windows unless a suitable Windows runtime is configured.
+
+When reporting a build failure, include:
+  - Operating system and architecture
+  - Compiler/toolchain and MXE target, if applicable
+  - The make command used
+  - The first compiler or linker error, plus relevant lines around it
+
+Do not include browser cookies, exported session files, or other
+credentials in build logs or bug reports.

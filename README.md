@@ -1,179 +1,91 @@
 # Hash YouTube Downloader
 
-A small C++17 application for inspecting YouTube format metadata and downloading streams when YouTube exposes usable direct URLs.
+Hash is a native C++17 application for inspecting YouTube format metadata and downloading streams when YouTube exposes usable direct media URLs. It provides both a command-line interface (CLI) and an optional Qt-based graphical interface (GUI).
 
-> **Limitations:** This is a best-effort downloader, not a complete replacement for [`yt-dlp`](https://github.com/yt-dlp/yt-dlp). It does not implement every YouTube player/signature transformation, guarantee every adaptive format can be downloaded, or bypass access controls. Public videos and playlists may work without cookies. Private, age-restricted, region-restricted, or bot-protected content may be unavailable.
+> **Limitations:** Hash is an experimental, best-effort downloader and is not a complete replacement for [`yt-dlp`](https://github.com/yt-dlp/yt-dlp). It does not implement every YouTube player or signature transformation, guarantee that every adaptive format can be downloaded, or bypass access controls. Public videos and playlists may work without cookies. Private, age-restricted, region-restricted, sign-in-gated, or bot-protected content may be unavailable.
 
 ## Features
 
-- CLI for listing available formats and downloading selected streams.
-- Optional Qt 5 GUI.
-- Best-effort public playlist enumeration.
-- Browser-profile-aware user-agent handling.
-- Optional Netscape-format cookie files and support for converting compatible browser SQLite cookie databases.
-- Makefile-based Linux build and MXE Windows cross-build.
+- List format metadata exposed by YouTube for a video.
+- Select formats by format ID, container, or quality selector.
+- Download individual videos and attempt public playlist downloads.
+- Use the CLI or the Qt graphical interface.
+- Select a browser profile for user-agent handling.
+- Optionally provide a Netscape-format cookie file or a compatible browser SQLite cookie database.
+- Cache converted SQLite cookie exports for reuse.
 
-## Requirements
+## Using the CLI
 
-### Linux CLI
-
-- C++17 compiler (such as GCC or Clang)
-- GNU Make
-- `pkg-config`
-- libcurl development headers/libraries
-- SQLite development headers/libraries
-- Boost headers (Boost.PropertyTree is used for JSON parsing)
-
-### Linux GUI
-
-The GUI additionally requires Qt 5 Widgets development files.
-
-On Debian/Ubuntu, install the dependencies with:
+Show the available commands:
 
 ```sh
-sudo apt update
-sudo apt install build-essential pkg-config libcurl4-openssl-dev libsqlite3-dev libboost-dev qtbase5-dev
+yt-downloader --help
 ```
 
-If you only need the CLI and don't want to install Qt, use `make cli` instead of the default `make` target.
-
-## Build on Linux
-
-Run these commands from the repository root:
+List formats for a video:
 
 ```sh
-# Build CLI and GUI
-make
-
-# Build only the CLI
-make cli
-
-# Build the CLI and GUI
-make gui
-
-# Build and run the Linux tests
-make test
+yt-downloader list 'https://www.youtube.com/watch?v=VIDEO_ID'
 ```
 
-The executables are written to:
-
-```text
-build/linux/bin/yt-downloader
-build/linux/bin/yt-downloader-gui
-```
-
-## Build for Windows with MXE
-
-The Windows cross-build uses MXE's static target, `x86_64-w64-mingw32.static`. MXE must be installed at `~/Code/mxe` by default, and its target must have the required static curl, SQLite, Boost, Qt 5, and Qt Windows platform-plugin development files. Set `MXE_ROOT` or `MXE_TARGET` on the make command line to override the defaults.
+List the entries exposed for a public playlist:
 
 ```sh
-# Build Windows CLI and GUI
-make windows
-
-# Build Linux and Windows
-make all-platforms
-
-# Put the Windows executables into a distribution directory
-make package-windows
+yt-downloader list 'https://www.youtube.com/playlist?list=PLAYLIST_ID'
 ```
 
-Windows build outputs are written to `build/windows/`. The package target copies the executables to:
-
-```text
-build/windows/package/
-```
-
-The intended package contains `yt-downloader.exe` and `yt-downloader-gui.exe`. A static GUI build depends on a matching static Qt installation and a correctly linked/imported `QWindowsIntegrationPlugin`; a successful link alone does not guarantee the program works on every Windows machine. Check the DLL imports and test the package on a Windows system that does not have MXE's DLL directories on `PATH` before distributing it.
-
-If compiling MXE packages under WSL causes the environment to run out of resources, reduce parallel jobs (for example, `-j2`) rather than using every reported CPU core.
-
-## Usage
-
-### CLI
-
-Examples below assume the Linux executable at `build/linux/bin/yt-downloader`.
+Download selected format IDs:
 
 ```sh
-# Show command help
-./build/linux/bin/yt-downloader --help
-
-# List video formats
-./build/linux/bin/yt-downloader list 'https://www.youtube.com/watch?v=VIDEO_ID'
-
-# List a playlist
-./build/linux/bin/yt-downloader list 'https://youtube.com/playlist?list=PLAYLIST_ID'
-
-# Download selected format IDs
-./build/linux/bin/yt-downloader download 'https://youtu.be/VIDEO_ID' 18,22
-
-# Save downloads into a directory
-./build/linux/bin/yt-downloader download 'https://youtu.be/VIDEO_ID' 18,22 -o ./videos
-
-# Use a Netscape-format cookies file
-./build/linux/bin/yt-downloader list 'https://youtu.be/VIDEO_ID' --cookies cookies.txt
-
-# Make an explicitly unauthenticated request
-./build/linux/bin/yt-downloader list 'https://youtu.be/VIDEO_ID' --no-cookies
-
-# Start interactive mode
-./build/linux/bin/yt-downloader interactive
+yt-downloader download 'https://youtu.be/VIDEO_ID' 18,22
 ```
 
-See `./build/linux/bin/yt-downloader --help` for the options supported by the current build.
-
-### GUI
+Choose a container and target quality:
 
 ```sh
-./build/linux/bin/yt-downloader-gui
+yt-downloader download 'https://youtu.be/VIDEO_ID' mp4:1080 -o ./videos
 ```
+
+Use a cookie export and browser profile:
+
+```sh
+yt-downloader list 'https://youtu.be/VIDEO_ID' --browser edge --cookies cookies.txt
+```
+
+Explicitly continue without cookies:
+
+```sh
+yt-downloader list 'https://youtu.be/VIDEO_ID' --no-cookies
+```
+
+Start interactive mode:
+
+```sh
+yt-downloader interactive
+```
+
+The exact selectors and options supported by a release are shown by `yt-downloader --help`.
+
+## Using the GUI
+
+Open **Hash YouTube Downloader**, enter a video or playlist URL, choose a format selector, and select an output folder. Use the browser and cookie fields when a signed-in session is needed. The GUI displays command output and download status in its log area.
+
+The GUI is designed to include the downloader functionality directly. A separate CLI executable may also be distributed as a standalone command-line tool or fallback, depending on the release package.
 
 ## Cookies and privacy
 
+- Cookie files may contain active session credentials. Keep them private.
+- Never commit cookie files, browser databases, exported sessions, or private configuration files to the repository.
 - `--cookies` accepts a Netscape-format `cookies.txt` file or a supported browser SQLite cookie database/path.
-- SQLite conversion does not guarantee that encrypted browser cookie values can be decrypted. Chrome/Edge profiles may store protected values that this project cannot currently read as usable cookies.
-- Cookies can contain active session credentials. Never commit cookie files, browser databases, exported sessions, or private configuration files.
-- Without usable cookies, some videos and playlist entries may be unavailable due to sign-in requirements, region restrictions, age restrictions, or YouTube anti-abuse checks.
+- SQLite conversion does not guarantee that encrypted browser cookie values can be decrypted. Chromium-based browsers such as Chrome and Edge may protect cookie values in ways this project cannot currently read as usable cookies. Exporting a Netscape-format cookie file may be necessary.
+- Selecting `--browser edge` or another browser profile changes the client profile/user-agent handling; it does not automatically extract or decrypt that browser's cookies.
+- Without usable cookies, some videos and playlist entries may be unavailable because of sign-in requirements, privacy settings, age restrictions, regional restrictions, or YouTube anti-abuse checks.
 
-## Source layout
+## Project status
 
-```text
-include/ytdl/
-  downloader.hpp
-  format_selector.hpp
-  http_client.hpp
-  types.hpp
-  utils.hpp
-  youtube_client.hpp
+Hash is an early-stage project. YouTube can change its player behavior, metadata responses, and access checks at any time. Some formats may be listed but not downloadable, especially when their URLs require signature processing or when separate video and audio streams must be combined.
 
-src/client/
-  cli.cpp
-  gui.cpp
-
-src/core/
-  client/
-    http.cpp
-    youtube.cpp
-  cookie.cpp
-  download/
-    playlist.cpp
-    video.cpp
-  format/
-    parser.cpp
-    parser.hpp
-    selector.cpp
-  utils.cpp
-
-tests/
-  test_utils.cpp
-  test_format_selector.cpp
-
-Makefile
-README.md
-CONTRIBUTING.md
-LICENSE.md
-```
-
-The `src/client/` directory contains the CLI and GUI entry points. Shared networking, cookie handling, parsing, format selection, and download operations live under `src/core/`. Public declarations are in `include/ytdl/`.
+Please include the application version, operating system, command or GUI action, and relevant error output when reporting a problem. Do not include cookies or other private session data in bug reports.
 
 ## Contributing
 
@@ -181,4 +93,4 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
+This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md) for details.

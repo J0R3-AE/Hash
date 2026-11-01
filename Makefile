@@ -1,18 +1,18 @@
+
 # Hash YouTube Downloader
 #
 # Linux:                 make linux
 # Windows (static):      make windows
 # Both platforms:        make all-platforms
-# Package Windows EXEs:  make package-windows
+# Package standalone GUI: make package-windows
 # Run tests:             make test
 # Remove build outputs:  make clean
 #
-# All generated files stay under:
+# Output directories:
 #   build/linux/
 #   build/windows/
 #
-# Windows requires MXE's x86_64-w64-mingw32.static target,
-# including static Qt 5, curl, and SQLite libraries.
+# Windows uses MXE's x86_64-w64-mingw32.static target.
 
 .DEFAULT_GOAL := all
 
@@ -37,14 +37,14 @@ WINDOWS_DIR := build/windows
 WIN_BIN_DIR  := $(WINDOWS_DIR)/bin
 WIN_DIST_DIR := $(WINDOWS_DIR)/package
 
-WIN_QT_LIB_DIR     := $(MXE_PREFIX)/qt5/lib
-WIN_QT_PLUGIN_DIR  := $(MXE_PREFIX)/qt5/plugins/platforms
+WIN_QT_LIB_DIR    := $(MXE_PREFIX)/qt5/lib
+WIN_QT_PLUGIN_DIR := $(MXE_PREFIX)/qt5/plugins/platforms
 
 WIN_QT_PLUGIN := $(firstword \
     $(wildcard $(WIN_QT_PLUGIN_DIR)/libqwindows.a) \
     $(wildcard $(WIN_QT_PLUGIN_DIR)/qwindows.a))
 
-# Qt 5 static platform-plugin support libraries.
+# Static Qt 5 platform-plugin dependencies.
 WIN_QT_SUPPORT_LIBS := \
     $(WIN_QT_LIB_DIR)/libQt5EventDispatcherSupport.a \
     $(WIN_QT_LIB_DIR)/libQt5FontDatabaseSupport.a \
@@ -53,7 +53,7 @@ WIN_QT_SUPPORT_LIBS := \
     $(WIN_QT_LIB_DIR)/libQt5WindowsUIAutomationSupport.a \
     $(WIN_QT_LIB_DIR)/libQt5PlatformCompositorSupport.a
 
-# Native Windows libraries used by the Qt platform plugin.
+# Windows user-mode system libraries required by the Qt platform plugin.
 WIN_QT_SYSTEM_LIBS := \
     -ldwmapi \
     -limm32 \
@@ -81,10 +81,14 @@ ifeq ($(PLATFORM),windows)
     THREAD_FLAGS :=
     GUI_EXTRA_FLAGS := -mwindows
 
-    # Static libraries and static C/C++ runtime.
-    CORE_PKG_LIBS := $(shell $(PKG_CONFIG) --static --libs libcurl sqlite3 2>/dev/null)
+    CORE_PKG_LIBS_RAW := $(shell \
+        $(PKG_CONFIG) --static --libs libcurl sqlite3 2>/dev/null)
 
-    # Re-scan static archives to resolve references between Qt libraries.
+    # Do not link the kernel-driver name NETIO as an application library.
+    CORE_PKG_LIBS := $(filter-out -lnetio,$(CORE_PKG_LIBS_RAW))
+    CORE_PKG_LIBS += -liphlpapi
+
+    # Group static Qt archives to resolve circular references.
     QT_LIBS := \
         -Wl,--start-group \
         $(WIN_QT_PLUGIN) \
@@ -106,8 +110,11 @@ else
     THREAD_FLAGS := -pthread
     GUI_EXTRA_FLAGS := -fPIC
 
-    CORE_PKG_LIBS := $(shell $(PKG_CONFIG) --libs libcurl sqlite3 2>/dev/null)
-    QT_LIBS := $(shell $(PKG_CONFIG) --libs Qt5Widgets 2>/dev/null)
+    CORE_PKG_LIBS := $(shell \
+        $(PKG_CONFIG) --libs libcurl sqlite3 2>/dev/null)
+
+    QT_LIBS := $(shell \
+        $(PKG_CONFIG) --libs Qt5Widgets 2>/dev/null)
 
     STATIC_LINK_FLAGS :=
     QT_STATIC_CPPFLAGS :=
@@ -125,23 +132,40 @@ TEST_TARGET := $(TEST_DIR)/test-utils$(EXEEXT)
 SELECTOR_TEST_TARGET := $(TEST_DIR)/test-format-selector$(EXEEXT)
 
 # ==================================================
-# Sources and compiler flags
+# Source files and object files
 # ==================================================
 
 CORE_SOURCES := $(shell find src/core -type f -name '*.cpp' | sort)
 
 CLIENT_SOURCES := $(filter-out src/client/gui.cpp,$(wildcard src/client/*.cpp))
 
-CORE_OBJECTS := $(patsubst src/core/%.cpp,$(OBJ_DIR)/core/%.o,$(CORE_SOURCES))
-CLIENT_OBJECTS := $(patsubst src/client/%.cpp,$(OBJ_DIR)/client/%.o,$(CLIENT_SOURCES))
+CORE_OBJECTS := $(patsubst \
+    src/core/%.cpp,$(OBJ_DIR)/core/%.o,$(CORE_SOURCES))
 
-DEPFILES := $(CORE_OBJECTS:.o=.d) $(CLIENT_OBJECTS:.o=.d)
+CLIENT_OBJECTS := $(patsubst \
+    src/client/%.cpp,$(OBJ_DIR)/client/%.o,$(CLIENT_SOURCES))
 
-CORE_PKG_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcurl sqlite3 2>/dev/null)
-QT_CFLAGS := $(shell $(PKG_CONFIG) --cflags Qt5Widgets 2>/dev/null)
+# Compile cli.cpp a second time for the GUI, with its standalone
+# main() wrapper disabled by YTDL_EMBED_CLI.
+GUI_CLI_OBJECT := $(OBJ_DIR)/client/cli-embedded.o
+
+DEPFILES := \
+    $(CORE_OBJECTS:.o=.d) \
+    $(CLIENT_OBJECTS:.o=.d) \
+    $(GUI_CLI_OBJECT:.o=.d)
+
+# ==================================================
+# Compiler and dependency flags
+# ==================================================
+
+CORE_PKG_CFLAGS := $(shell \
+    $(PKG_CONFIG) --cflags libcurl sqlite3 2>/dev/null)
+
+QT_CFLAGS := $(shell \
+    $(PKG_CONFIG) --cflags Qt5Widgets 2>/dev/null)
 
 CPPFLAGS += -Iinclude $(CORE_PKG_CFLAGS)
-CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra -Wpedantic
+CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wpedantic
 
 LDLIBS += $(CORE_PKG_LIBS) $(THREAD_FLAGS)
 
@@ -156,7 +180,7 @@ all: check-core-deps check-qt-deps $(TARGET) $(GUI_TARGET)
 
 cli: check-core-deps $(TARGET)
 
-gui: check-core-deps check-qt-deps $(TARGET) $(GUI_TARGET)
+gui: check-core-deps check-qt-deps $(GUI_TARGET)
 
 linux:
 	$(MAKE) --no-print-directory PLATFORM=linux all
@@ -219,7 +243,7 @@ check-qt-deps:
 endif
 
 # ==================================================
-# Compile object files
+# Compile core and regular client objects
 # ==================================================
 
 $(OBJ_DIR)/core/%.o: src/core/%.cpp | check-core-deps
@@ -233,7 +257,16 @@ $(OBJ_DIR)/client/%.o: src/client/%.cpp | check-core-deps
 		-MMD -MP -c "$<" -o "$@"
 
 # ==================================================
-# Link CLI and GUI
+# Compile the embedded CLI object
+# ==================================================
+
+$(GUI_CLI_OBJECT): src/client/cli.cpp | check-core-deps
+	mkdir -p "$(dir $@)"
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(THREAD_FLAGS) \
+		-DYTDL_EMBED_CLI -MMD -MP -c "$<" -o "$@"
+
+# ==================================================
+# Link standalone CLI and integrated GUI
 # ==================================================
 
 $(TARGET): $(CORE_OBJECTS) $(CLIENT_OBJECTS) | check-core-deps
@@ -241,11 +274,14 @@ $(TARGET): $(CORE_OBJECTS) $(CLIENT_OBJECTS) | check-core-deps
 	$(CXX) $(LDFLAGS) $(STATIC_LINK_FLAGS) \
 		-o "$@" $^ $(LDLIBS)
 
-$(GUI_TARGET): src/client/gui.cpp | check-qt-deps
+# The GUI contains the core and CLI entry point directly.
+# It must not rely on a separate yt-downloader executable.
+$(GUI_TARGET): src/client/gui.cpp $(CORE_OBJECTS) $(GUI_CLI_OBJECT) | check-core-deps check-qt-deps
 	mkdir -p "$(dir $@)"
 	$(CXX) $(CPPFLAGS) $(QT_CFLAGS) $(CXXFLAGS) \
-		$(QT_STATIC_CPPFLAGS) $(GUI_EXTRA_FLAGS) $(LDFLAGS) \
-		$(STATIC_LINK_FLAGS) -o "$@" "$<" $(QT_LIBS)
+		-DYTDL_GUI_EMBEDDED_CLI $(QT_STATIC_CPPFLAGS) \
+		$(GUI_EXTRA_FLAGS) $(LDFLAGS) $(STATIC_LINK_FLAGS) \
+		-o "$@" $^ $(LDLIBS) $(QT_LIBS)
 
 # ==================================================
 # Tests
@@ -284,23 +320,27 @@ endif
 # Windows distribution
 # ==================================================
 #
-# The package contains only the two executables.
-# Windows system DLLs remain normal Windows dependencies.
+# Package only the integrated GUI. The standalone CLI remains
+# available in build/windows/bin/yt-downloader.exe.
+#
+# This target does not copy runtime DLLs.
 
 package-windows: windows
 	@set -eu; \
 	DIST="$(WIN_DIST_DIR)"; \
 	rm -rf "$$DIST"; \
 	mkdir -p "$$DIST"; \
-	cp -f "$(WIN_BIN_DIR)/yt-downloader.exe" "$$DIST/yt-downloader.exe"; \
-	cp -f "$(WIN_BIN_DIR)/yt-downloader-gui.exe" "$$DIST/yt-downloader-gui.exe"; \
+	cp -f "$(WIN_BIN_DIR)/yt-downloader-gui.exe" \
+		"$$DIST/yt-downloader-gui.exe"; \
+	cp -f "$(WIN_BIN_DIR)/yt-downloader.exe" \
+		"$$DIST/yt-downloader.exe"; \
 	echo; \
-	echo "Windows executables packaged in $$DIST"; \
+	echo "Windows package created in $$DIST"; \
 	echo "Files:"; \
 	find "$$DIST" -maxdepth 1 -type f -print | sort; \
 	echo; \
 	echo "Imported DLLs (Windows system DLLs are expected):"; \
-	for EXE in "$$DIST/yt-downloader.exe" "$$DIST/yt-downloader-gui.exe"; do \
+	for EXE in "$$DIST/yt-downloader-gui.exe" "$$DIST/yt-downloader.exe"; do \
 		echo "  $$(basename "$$EXE"):"; \
 		"$(MXE_OBJDUMP)" -p "$$EXE" | \
 			sed -n 's/^[[:space:]]*DLL Name: /    /p'; \

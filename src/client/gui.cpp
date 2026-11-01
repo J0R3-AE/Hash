@@ -1,3 +1,4 @@
+
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -10,20 +11,41 @@
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPair>
 #include <QProcess>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QStandardPaths>
+#include <QString>
 #include <QStringList>
 #include <QTextCursor>
 #include <QTextEdit>
+#include <QThread>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
+#ifdef YTDL_GUI_EMBEDDED_CLI
+#include "ytdl/cli.hpp"
+
+#include <atomic>
+#include <exception>
+#include <functional>
+#include <iostream>
+#include <memory>
+#include <streambuf>
+#include <string>
+#include <utility>
+#include <vector>
+#endif
+
 #ifdef Q_OS_WIN
 #include <QtPlugin>
+
+#if defined(QT_STATICPLUGIN)
 Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
+#endif
 #endif
 
 #ifdef _WIN32
@@ -32,15 +54,115 @@ Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
 #endif
 #include <windows.h>
 #endif
+
 #include <filesystem>
 
 namespace fs = std::filesystem;
 
 // ============================================================
+// Embedded CLI output capture
+// ============================================================
+
+#ifdef YTDL_GUI_EMBEDDED_CLI
+
+class GuiLogBuffer final : public std::streambuf
+{
+public:
+    using Callback = std::function<void(const QString &)>;
+
+    explicit GuiLogBuffer(Callback callback)
+        : callback_(std::move(callback))
+    {
+    }
+
+protected:
+    int_type overflow(int_type ch) override
+    {
+        if (traits_type::eq_int_type(ch, traits_type::eof()))
+        {
+            flushBuffer();
+            return traits_type::not_eof(ch);
+        }
+
+        const char value = traits_type::to_char_type(ch);
+        buffer_.push_back(value);
+
+        if (value == '\n' || buffer_.size() >= 4096)
+        {
+            flushBuffer();
+        }
+
+        return ch;
+    }
+
+    std::streamsize xsputn(
+        const char *data,
+        std::streamsize size) override
+    {
+        for (std::streamsize i = 0; i < size; ++i)
+        {
+            overflow(traits_type::to_int_type(data[i]));
+        }
+
+        return size;
+    }
+
+    int sync() override
+    {
+        flushBuffer();
+        return 0;
+    }
+
+private:
+    void flushBuffer()
+    {
+        if (buffer_.empty())
+        {
+            return;
+        }
+
+        const QString text = QString::fromUtf8(
+            buffer_.data(),
+            static_cast<int>(buffer_.size()));
+
+        buffer_.clear();
+        callback_(text);
+    }
+
+    Callback callback_;
+    std::string buffer_;
+};
+
+#endif
+
+// ============================================================
+// URL input normalization
+// ============================================================
+
+// Accept normal YouTube URLs and Markdown links pasted from
+// chat or documentation, for example [title](https://youtu.be/...).
+static QString normalizeUrlInput(QString input)
+{
+    input = input.trimmed();
+
+    static const QRegularExpression markdownLink(
+        R"(^\[[^\]]+\]\((https?://[^)]+)\)$)",
+        QRegularExpression::CaseInsensitiveOption);
+
+    const auto match = markdownLink.match(input);
+
+    if (match.hasMatch())
+    {
+        return match.captured(1).trimmed();
+    }
+
+    return input;
+}
+
+// ============================================================
 // Browser detection
 // ============================================================
 
-// These are the browser identifiers passed to the CLI.
 static QStringList browserExecutableNames(const QString &browser)
 {
     if (browser == "firefox")
@@ -89,10 +211,6 @@ static QStringList browserExecutableNames(const QString &browser)
     return {};
 }
 
-// Return possible browser installation paths.
-//
-// On Windows, check Program Files and Local AppData.
-// Under WSL, also check mounted Windows drives and user profiles.
 static QStringList knownBrowserPaths(const QString &browser)
 {
     QStringList roots;
@@ -107,8 +225,8 @@ static QStringList knownBrowserPaths(const QString &browser)
 #elif defined(Q_OS_LINUX)
 
     const bool isWSL =
-        !qEnvironmentVariable("WSL_DISTRO_NAME").isEmpty() || QFileInfo::exists(
-                                                                  "/proc/sys/fs/binfmt_misc/WSLInterop");
+        !qEnvironmentVariable("WSL_DISTRO_NAME").isEmpty() ||
+        QFileInfo::exists("/proc/sys/fs/binfmt_misc/WSLInterop");
 
     if (isWSL)
     {
@@ -117,9 +235,8 @@ static QStringList knownBrowserPaths(const QString &browser)
 
         QDir users("/mnt/c/Users");
 
-        const QStringList profiles =
-            users.entryList(
-                QDir::Dirs | QDir::NoDotAndDotDot);
+        const QStringList profiles = users.entryList(
+            QDir::Dirs | QDir::NoDotAndDotDot);
 
         for (const QString &profile : profiles)
         {
@@ -132,16 +249,19 @@ static QStringList knownBrowserPaths(const QString &browser)
 
     if (browser == "firefox")
     {
-        relativePaths << "Mozilla Firefox/firefox.exe"
-                      << "Programs/Mozilla Firefox/firefox.exe";
+        relativePaths
+            << "Mozilla Firefox/firefox.exe"
+            << "Programs/Mozilla Firefox/firefox.exe";
     }
     else if (browser == "edge")
     {
-        relativePaths << "Microsoft/Edge/Application/msedge.exe";
+        relativePaths
+            << "Microsoft/Edge/Application/msedge.exe";
     }
     else if (browser == "chrome")
     {
-        relativePaths << "Google/Chrome/Application/chrome.exe";
+        relativePaths
+            << "Google/Chrome/Application/chrome.exe";
     }
     else if (browser == "brave")
     {
@@ -150,9 +270,10 @@ static QStringList knownBrowserPaths(const QString &browser)
     }
     else if (browser == "chromium")
     {
-        relativePaths << "Chromium/Application/chromium.exe"
-                      << "Chromium/Application/chrome.exe"
-                      << "Programs/Chromium/Application/chrome.exe";
+        relativePaths
+            << "Chromium/Application/chromium.exe"
+            << "Chromium/Application/chrome.exe"
+            << "Programs/Chromium/Application/chrome.exe";
     }
 
     QStringList paths;
@@ -173,20 +294,16 @@ static QStringList knownBrowserPaths(const QString &browser)
     return paths;
 }
 
-// Resolve a browser identifier to its actual executable.
 static QString resolveBrowserExecutable(const QString &browserName)
 {
-    const QString browser =
-        browserName.trimmed().toLower();
+    const QString browser = browserName.trimmed().toLower();
 
     if (browser.isEmpty())
     {
         return {};
     }
 
-    // First, search PATH.
-    for (const QString &executable :
-         browserExecutableNames(browser))
+    for (const QString &executable : browserExecutableNames(browser))
     {
         const QString resolved =
             QStandardPaths::findExecutable(executable);
@@ -197,7 +314,6 @@ static QString resolveBrowserExecutable(const QString &browserName)
         }
     }
 
-    // Then, search common installation directories.
     for (const QString &path : knownBrowserPaths(browser))
     {
         const QFileInfo info(path);
@@ -211,22 +327,17 @@ static QString resolveBrowserExecutable(const QString &browserName)
     return {};
 }
 
-// Return display names and separate CLI identifiers.
 static QList<QPair<QString, QString>> findInstalledBrowsers()
 {
     const QList<QPair<QString, QString>> known = {
         qMakePair(QStringLiteral("Firefox"),
                   QStringLiteral("firefox")),
-
         qMakePair(QStringLiteral("Microsoft Edge"),
                   QStringLiteral("edge")),
-
         qMakePair(QStringLiteral("Google Chrome"),
                   QStringLiteral("chrome")),
-
         qMakePair(QStringLiteral("Brave"),
                   QStringLiteral("brave")),
-
         qMakePair(QStringLiteral("Chromium"),
                   QStringLiteral("chromium"))};
 
@@ -268,52 +379,67 @@ public:
             QFormLayout::ExpandingFieldsGrow);
 
         urlEdit = new QLineEdit(this);
+        urlEdit->setPlaceholderText(
+            "https://www.youtube.com/watch?v=...");
 
         selectorEdit = new QLineEdit(this);
         selectorEdit->setText("mp4:1080");
+        selectorEdit->setPlaceholderText("18,22 or mp4:1080");
 
         browserCombo = new QComboBox(this);
 
         for (const auto &browser : findInstalledBrowsers())
         {
-            browserCombo->addItem(
-                browser.first,
-                browser.second);
+            browserCombo->addItem(browser.first, browser.second);
         }
 
-        // If no supported browser was found, allow the user
-        // to use the operating system's default browser.
         if (browserCombo->count() == 0)
         {
-            browserCombo->addItem(
-                "System default",
-                QString());
+            browserCombo->addItem("System default", QString());
         }
 
         cookiesEdit = new QLineEdit(this);
+        cookiesEdit->setPlaceholderText(
+            "Optional cookies.txt or SQLite database");
 
         outputEdit = new QLineEdit(this);
-        outputEdit->setText(
-            QString::fromStdString(
-                fs::current_path().string()));
+        outputEdit->setText(QDir::currentPath());
+
+        // Cookies field with its Browse button beside it.
+        auto *cookiesRow = new QHBoxLayout;
+        cookiesRow->setContentsMargins(0, 0, 0, 0);
+        cookiesRow->setSpacing(6);
+
+        auto *browseCookiesButton =
+            new QPushButton("Browse...", this);
+
+        cookiesRow->addWidget(cookiesEdit, 1);
+        cookiesRow->addWidget(browseCookiesButton);
+
+        // Output-directory field with its Browse button beside it.
+        auto *outputRow = new QHBoxLayout;
+        outputRow->setContentsMargins(0, 0, 0, 0);
+        outputRow->setSpacing(6);
+
+        auto *browseOutputButton =
+            new QPushButton("Browse...", this);
+
+        outputRow->addWidget(outputEdit, 1);
+        outputRow->addWidget(browseOutputButton);
 
         form->addRow("YouTube URL:", urlEdit);
         form->addRow("Selector:", selectorEdit);
         form->addRow("Browser:", browserCombo);
-        form->addRow("Cookies file / SQLite DB:", cookiesEdit);
-        form->addRow("Output folder:", outputEdit);
+        form->addRow("Cookies file / SQLite DB:", cookiesRow);
+        form->addRow("Output folder:", outputRow);
+
+        layout->addLayout(form);
 
         // ----------------------------------------------------
-        // Buttons
+        // Action buttons
         // ----------------------------------------------------
 
         auto *rowButtons = new QHBoxLayout;
-
-        auto *browseCookiesButton =
-            new QPushButton("Browse", this);
-
-        auto *browseOutputButton =
-            new QPushButton("Browse", this);
 
         auto *openLoginButton =
             new QPushButton("Open YouTube", this);
@@ -324,13 +450,11 @@ public:
         startButton = new QPushButton("Download", this);
         startButton->setDefault(true);
 
-        rowButtons->addWidget(browseCookiesButton);
-        rowButtons->addWidget(browseOutputButton);
         rowButtons->addWidget(openLoginButton);
+        rowButtons->addStretch(1);
         rowButtons->addWidget(listButton);
         rowButtons->addWidget(startButton);
 
-        layout->addLayout(form);
         layout->addLayout(rowButtons);
 
         // ----------------------------------------------------
@@ -346,7 +470,7 @@ public:
         layout->addWidget(logEdit, 1);
 
         // ----------------------------------------------------
-        // Browse for cookies
+        // Browse for cookies file
         // ----------------------------------------------------
 
         connect(
@@ -360,7 +484,7 @@ public:
                         this,
                         "Choose cookies.txt or SQLite database",
                         QDir::homePath(),
-                        "Cookies file (*.txt *.sqlite *.sqlite3 *.db);;"
+                        "Cookie files (*.txt *.sqlite *.sqlite3 *.db);;"
                         "All files (*)");
 
                 if (!path.isEmpty())
@@ -383,7 +507,9 @@ public:
                     QFileDialog::getExistingDirectory(
                         this,
                         "Choose output folder",
-                        QDir::homePath());
+                        outputEdit->text().trimmed().isEmpty()
+                            ? QDir::homePath()
+                            : outputEdit->text().trimmed());
 
                 if (!path.isEmpty())
                 {
@@ -401,26 +527,25 @@ public:
             this,
             [this]()
             {
-                const QString selectedBrowser =
+                const QString browser =
                     browserCombo->currentData().toString();
 
-                const QString browserExecutable =
-                    resolveBrowserExecutable(selectedBrowser);
+                const QString executable =
+                    resolveBrowserExecutable(browser);
 
-                if (!browserExecutable.isEmpty())
+                if (!executable.isEmpty())
                 {
                     const bool launched =
                         QProcess::startDetached(
-                            browserExecutable,
+                            executable,
                             QStringList{
                                 "https://www.youtube.com"});
 
                     if (launched)
                     {
                         appendLog(
-                            "Opened YouTube in: " + browserExecutable + "\nSign in there, then export "
-                                                                        "a cookies.txt file.");
-
+                            "Opened YouTube in: " + executable +
+                            "\nSign in there, then export a cookies.txt file.\n");
                         return;
                     }
                 }
@@ -432,64 +557,180 @@ public:
                 if (opened)
                 {
                     appendLog(
-                        "Opened YouTube in the system "
-                        "default browser. Sign in there, "
-                        "then export a cookies.txt file.");
+                        "Opened YouTube in the system default browser. "
+                        "Sign in there, then export a cookies.txt file.\n");
                 }
                 else
                 {
-                    appendLog(
-                        "Could not open YouTube.");
+                    appendLog("Could not open YouTube.\n");
                 }
             });
 
         // ----------------------------------------------------
-        // Locate and launch the CLI
+        // Shared command runner
         // ----------------------------------------------------
 
-        const auto runBinaryCommand = [this, listButton](const QStringList &args)
+        const auto runBinaryCommand =
+            [this, listButton](const QStringList &args)
         {
-            if (process && process->state() != QProcess::NotRunning)
+#ifdef YTDL_GUI_EMBEDDED_CLI
+            // Primary mode: run the CLI code compiled into this GUI.
+            if (worker != nullptr)
             {
-                appendLog("A command is already running. Please wait for it to finish.");
+                appendLog(
+                    "A command is already running. Please wait.\n");
                 return;
             }
-            const QString cwd = QDir::currentPath();
 
+            appendLog(
+                "Running integrated downloader:\n  " +
+                args.join("\n  ") + "\n\n");
+
+            startButton->setEnabled(false);
+            listButton->setEnabled(false);
+
+            auto exitCode = std::make_shared<std::atomic<int>>(1);
+
+            QThread *job = QThread::create(
+                [this, args, exitCode]()
+                {
+                    const auto postLog =
+                        [this](const QString &text)
+                    {
+                        QMetaObject::invokeMethod(
+                            this,
+                            [this, text]()
+                            {
+                                appendLog(text);
+                            },
+                            Qt::QueuedConnection);
+                    };
+
+                    GuiLogBuffer stdoutBuffer(postLog);
+                    GuiLogBuffer stderrBuffer(postLog);
+
+                    std::streambuf *previousOut =
+                        std::cout.rdbuf(&stdoutBuffer);
+
+                    std::streambuf *previousErr =
+                        std::cerr.rdbuf(&stderrBuffer);
+
+                    int result = 1;
+
+                    try
+                    {
+                        std::vector<std::string> storage;
+                        storage.reserve(
+                            static_cast<std::size_t>(args.size()) + 1);
+
+                        storage.emplace_back("yt-downloader");
+
+                        for (const QString &arg : args)
+                        {
+                            storage.push_back(
+                                arg.toUtf8().toStdString());
+                        }
+
+                        std::vector<char *> argv;
+                        argv.reserve(storage.size() + 1);
+
+                        for (std::string &arg : storage)
+                        {
+                            argv.push_back(arg.data());
+                        }
+
+                        argv.push_back(nullptr);
+
+                        result = ytdl_cli_main(
+                            static_cast<int>(storage.size()),
+                            argv.data());
+                    }
+                    catch (const std::exception &error)
+                    {
+                        std::cerr
+                            << "Downloader exception: "
+                            << error.what() << '\n';
+                        result = 1;
+                    }
+                    catch (...)
+                    {
+                        std::cerr
+                            << "Downloader failed with an unknown exception.\n";
+                        result = 1;
+                    }
+
+                    std::cout.flush();
+                    std::cerr.flush();
+
+                    // Restore global streams before the worker exits.
+                    std::cout.rdbuf(previousOut);
+                    std::cerr.rdbuf(previousErr);
+
+                    exitCode->store(
+                        result,
+                        std::memory_order_release);
+                });
+
+            worker = job;
+
+            connect(
+                job,
+                &QThread::finished,
+                this,
+                [this, job, exitCode, listButton]()
+                {
+                    const int result =
+                        exitCode->load(std::memory_order_acquire);
+
+                    appendLog(
+                        QString(
+                            "\nIntegrated command finished with exit code %1\n")
+                            .arg(result));
+
+                    if (worker == job)
+                    {
+                        worker = nullptr;
+                    }
+
+                    startButton->setEnabled(true);
+                    listButton->setEnabled(true);
+
+                    job->deleteLater();
+                });
+
+            job->start();
+
+#else
+            // Fallback: this GUI was built without embedded CLI support.
+            if (process &&
+                process->state() != QProcess::NotRunning)
+            {
+                appendLog(
+                    "A command is already running. Please wait.\n");
+                return;
+            }
+
+            const QString cwd = QDir::currentPath();
             const QString appDir =
                 QCoreApplication::applicationDirPath();
 
             QStringList candidates;
 
 #ifdef Q_OS_WIN
-
-            // Prefer native Windows executables.
             candidates
+                << QDir(appDir).filePath("yt-downloader.exe")
+                << QDir(appDir).filePath("bin/yt-downloader.exe")
                 << QDir(cwd).filePath(
-                       "bin/windows/yt-downloader.exe")
+                       "build/windows/bin/yt-downloader.exe")
                 << QDir(cwd).filePath(
-                       "bin/yt-downloader.exe")
-                << QDir(appDir).filePath(
-                       "yt-downloader.exe")
-                << QDir(appDir).filePath(
-                       "bin/yt-downloader.exe")
-                << QDir(appDir).filePath(
-                       "../../bin/windows/yt-downloader.exe");
-
+                       "bin/windows/yt-downloader.exe");
 #else
-
-            // Prefer the Linux executable when running
-            // the GUI under WSL or another Linux system.
             candidates
+                << QDir(appDir).filePath("yt-downloader")
+                << QDir(appDir).filePath("bin/yt-downloader")
                 << QDir(cwd).filePath(
-                       "bin/yt-downloader")
-                << QDir(appDir).filePath(
-                       "yt-downloader")
-                << QDir(appDir).filePath(
-                       "../bin/yt-downloader")
-                << QDir(appDir).filePath(
-                       "../../bin/yt-downloader");
-
+                       "build/linux/bin/yt-downloader")
+                << QDir(cwd).filePath("bin/yt-downloader");
 #endif
 
             QString binary;
@@ -509,25 +750,21 @@ public:
             {
                 QMessageBox::critical(
                     this,
-                    "Binary not found",
-                    "Could not find the yt-downloader "
-                    "executable.\n\n"
-                    "Build the CLI first and ensure it "
-                    "is in the expected bin directory.");
-
+                    "Downloader unavailable",
+                    "This GUI was built without its embedded CLI, "
+                    "and the standalone yt-downloader executable "
+                    "could not be found.");
                 return;
             }
-
-            process = new QProcess(this);
 
             QProcess *child = new QProcess(this);
             process = child;
 
 #ifdef _WIN32
             child->setCreateProcessArgumentsModifier(
-                [](QProcess::CreateProcessArguments *args)
+                [](QProcess::CreateProcessArguments *processArgs)
                 {
-                    args->flags |= CREATE_NO_WINDOW;
+                    processArgs->flags |= CREATE_NO_WINDOW;
                 });
 #endif
 
@@ -540,8 +777,9 @@ public:
                 this,
                 [this, child]()
                 {
-                    appendLog(QString::fromUtf8(
-                        child->readAllStandardOutput()));
+                    appendLog(
+                        QString::fromUtf8(
+                            child->readAllStandardOutput()));
                 });
 
             connect(
@@ -550,21 +788,23 @@ public:
                 this,
                 [this, child]()
                 {
-                    appendLog(QString::fromUtf8(
-                        child->readAllStandardError()));
+                    appendLog(
+                        QString::fromUtf8(
+                            child->readAllStandardError()));
                 });
 
             connect(
                 child,
-                QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                QOverload<int, QProcess::ExitStatus>::of(
+                    &QProcess::finished),
                 this,
                 [this, child, listButton](
-                    int exitCode,
+                    int code,
                     QProcess::ExitStatus)
                 {
                     appendLog(
                         QString("\nProcess finished with exit code %1\n")
-                            .arg(exitCode));
+                            .arg(code));
 
                     if (process == child)
                     {
@@ -573,6 +813,7 @@ public:
 
                     startButton->setEnabled(true);
                     listButton->setEnabled(true);
+
                     child->deleteLater();
                 });
 
@@ -580,12 +821,14 @@ public:
                 child,
                 &QProcess::errorOccurred,
                 this,
-                [this, child, listButton](QProcess::ProcessError error)
+                [this, child, listButton](
+                    QProcess::ProcessError error)
                 {
                     if (error == QProcess::FailedToStart)
                     {
                         appendLog(
-                            "Failed to start the downloader: " + child->errorString());
+                            "Failed to start fallback CLI: " +
+                            child->errorString() + "\n");
 
                         if (process == child)
                         {
@@ -594,19 +837,24 @@ public:
 
                         startButton->setEnabled(true);
                         listButton->setEnabled(true);
+
                         child->deleteLater();
                     }
                 });
 
-            appendLog("Running: " + binary + " " + args.join(' '));
+            appendLog(
+                "Running fallback CLI: " + binary + "\n");
 
             startButton->setEnabled(false);
             listButton->setEnabled(false);
+
             child->start();
+
+#endif
         };
 
         // ----------------------------------------------------
-        // List video / playlist formats
+        // List formats
         // ----------------------------------------------------
 
         connect(
@@ -616,7 +864,7 @@ public:
             [this, runBinaryCommand]()
             {
                 const QString url =
-                    urlEdit->text().trimmed();
+                    normalizeUrlInput(urlEdit->text());
 
                 const QString browser =
                     browserCombo->currentData().toString();
@@ -629,24 +877,19 @@ public:
                     QMessageBox::warning(
                         this,
                         "Missing URL",
-                        "Please enter a YouTube video "
-                        "or playlist URL.");
-
+                        "Please enter a YouTube video or playlist URL.");
                     return;
                 }
 
-                if (url.contains(
-                        "playlist",
-                        Qt::CaseInsensitive) &&
+                if (url.contains("playlist", Qt::CaseInsensitive) &&
                     cookies.isEmpty())
                 {
                     QMessageBox::warning(
                         this,
                         "Public playlist only",
-                        "Without cookies, this tool can "
-                        "only list the anonymous public feed. "
-                        "Some private or restricted playlist "
-                        "entries will not appear.");
+                        "Without cookies, this tool can only list "
+                        "the anonymous public feed. Some private "
+                        "or restricted playlist entries will not appear.");
                 }
 
                 QStringList args;
@@ -676,7 +919,7 @@ public:
             [this, runBinaryCommand]()
             {
                 const QString url =
-                    urlEdit->text().trimmed();
+                    normalizeUrlInput(urlEdit->text());
 
                 const QString selector =
                     selectorEdit->text().trimmed();
@@ -695,9 +938,7 @@ public:
                     QMessageBox::warning(
                         this,
                         "Missing URL",
-                        "Please enter a YouTube video "
-                        "or playlist URL.");
-
+                        "Please enter a YouTube video or playlist URL.");
                     return;
                 }
 
@@ -706,9 +947,7 @@ public:
                     QMessageBox::warning(
                         this,
                         "Missing selector",
-                        "Please enter a selector such as "
-                        "mp4:1080.");
-
+                        "Please enter a selector such as mp4:1080.");
                     return;
                 }
 
@@ -718,7 +957,6 @@ public:
                         this,
                         "Missing output folder",
                         "Please choose an output folder.");
-
                     return;
                 }
 
@@ -727,9 +965,8 @@ public:
                     QMessageBox::warning(
                         this,
                         "No cookies supplied",
-                        "Continuing without cookies may fail "
-                        "for private, age-gated, or "
-                        "region-locked videos. Public content "
+                        "Continuing without cookies may fail for private, "
+                        "age-gated, or region-locked videos. Public content "
                         "may still work.");
                 }
 
@@ -752,14 +989,35 @@ public:
             });
 
         setWindowTitle("Hash YouTube Downloader");
-        resize(760, 540);
+        resize(800, 560);
+    }
+
+    ~DownloaderWindow() override
+    {
+#ifdef YTDL_GUI_EMBEDDED_CLI
+        // Do not destroy a running worker while it still references
+        // this window for queued log updates.
+        if (worker && worker->isRunning())
+        {
+            worker->wait();
+        }
+#endif
     }
 
 private:
     void appendLog(const QString &text)
     {
-        logEdit->append(text);
-        logEdit->moveCursor(QTextCursor::End);
+        QTextCursor cursor = logEdit->textCursor();
+        cursor.movePosition(QTextCursor::End);
+        cursor.insertText(text);
+
+        if (!text.endsWith('\n'))
+        {
+            cursor.insertText("\n");
+        }
+
+        logEdit->setTextCursor(cursor);
+        logEdit->ensureCursorVisible();
     }
 
     QLineEdit *urlEdit = nullptr;
@@ -772,6 +1030,10 @@ private:
     QPushButton *startButton = nullptr;
 
     QProcess *process = nullptr;
+
+#ifdef YTDL_GUI_EMBEDDED_CLI
+    QThread *worker = nullptr;
+#endif
 };
 
 // ============================================================
